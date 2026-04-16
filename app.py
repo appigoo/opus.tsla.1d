@@ -1686,6 +1686,28 @@ def _tg_mark_sent(key: str, sig_or_rank: str):
                 pass
 
 
+def _build_cond_id(raw_marks: str, c_vol: str, c_kline: str) -> str:
+    """
+    FIX BUG-11/12: 用條件內容的 hash 作為唯一 ID（而非排名）。
+
+    解決問題：
+    - 用戶編輯條件表後，排名不變但內容改變 → 不應被誤判為已發送
+    - 用戶手動填入重複排名 → 每條都要能獨立去重
+
+    內容相同 → hash 相同 → 去重生效
+    內容不同 → hash 不同 → 獨立去重
+    """
+    import hashlib
+    # 正規化：空白/—/全部都視為空，去除多餘空白
+    _norm_vol   = "" if c_vol   in ("", "—", "全部") else c_vol.strip()
+    _norm_kline = "" if c_kline in ("", "—", "全部") else c_kline.strip()
+    # 信號排序後 join（避免順序不同造成不同 hash）
+    _sorted_sigs = sorted([s.strip() for s in raw_marks.split(",") if s.strip()])
+    content = f"{','.join(_sorted_sigs)}|{_norm_vol}|{_norm_kline}"
+    h = hashlib.md5(content.encode("utf-8")).hexdigest()[:10]
+    return f"cond_{h}"
+
+
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2213,10 +2235,23 @@ for tab_idx, ticker in enumerate(selected_tickers):
                     )
                     # 即使關閉也標記為已處理，避免開啟後重複發送舊信號
                     for _rank, _, _ci, _ in _matched_list:
-                        _tg_mark_sent(_dedup_key_cond, f"cond_{_rank}")
+                        # FIX BUG-11/12: 用條件內容 hash 作為去重 key
+                        _row = _live_tg.iloc[_ci]
+                        _cid = _build_cond_id(
+                            _safe_str(_row.get("異動標記", "")),
+                            _safe_str(_row.get("成交量標記", "")),
+                            _safe_str(_row.get("K線形態", "")),
+                        )
+                        _tg_mark_sent(_dedup_key_cond, _cid)
                 else:
                     for _mn, (_rank, _wr, _ci, _dir) in enumerate(_matched_list, start=1):
-                        _cond_id = f"cond_{_rank}"
+                        # FIX BUG-11/12: 用條件內容 hash 作為去重 key，而非排名
+                        _row = _live_tg.iloc[_ci]
+                        _cond_id = _build_cond_id(
+                            _safe_str(_row.get("異動標記", "")),
+                            _safe_str(_row.get("成交量標記", "")),
+                            _safe_str(_row.get("K線形態", "")),
+                        )
                         if _tg_already_sent(_dedup_key_cond, _cond_id):
                             continue  # 已發送過，跳過
 
