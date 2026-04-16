@@ -1463,30 +1463,46 @@ if selected_tickers:
     _all_on  = (_n_on == _n_all)
     _all_off = (_n_on == 0)
 
-    _gc1, _gc2 = st.columns([1, 5])
+    _gc1, _gc2, _gc3 = st.columns([1, 1, 4])
+
+    # FIX BUG-A: 按鈕表達「動作」而非「狀態」
+    # 用兩個獨立按鈕：一個「全部開啟」、一個「全部關閉」，語意清楚
     with _gc1:
-        _g_label = (
-            f"🟢 全部開啟（{_n_on}/{_n_all}）" if _all_on
-            else f"🔴 全部關閉（{_n_on}/{_n_all}）" if _all_off
-            else f"⚡ 一鍵全開／全關（{_n_on}/{_n_all} 開啟）"
-        )
-        if st.button(_g_label, key="tg_global_toggle", use_container_width=True):
-            _new_state = not _all_on
+        if st.button(
+            f"🟢 全部開啟",
+            key="tg_all_on",
+            use_container_width=True,
+            disabled=_all_on,  # 已經全開時禁用
+            help=f"將全部 {_n_all} 支股票的 Telegram 開啟",
+        ):
             for _tk in selected_tickers:
-                st.session_state[f"tg_enabled_{_tk}"] = _new_state
+                st.session_state[f"tg_enabled_{_tk}"] = True
             st.rerun()
+
     with _gc2:
+        if st.button(
+            f"🔴 全部關閉",
+            key="tg_all_off",
+            use_container_width=True,
+            disabled=_all_off,  # 已經全關時禁用
+            help=f"將全部 {_n_all} 支股票的 Telegram 關閉（靜音模式）",
+        ):
+            for _tk in selected_tickers:
+                st.session_state[f"tg_enabled_{_tk}"] = False
+            st.rerun()
+
+    with _gc3:
         if _all_on:
             st.success(f"🟢 **全部 {_n_all} 支股票 Telegram 已開啟**", icon="✅")
         elif _all_off:
-            st.warning(f"🔴 **全部 {_n_all} 支股票 Telegram 已關閉**（調參模式）", icon="🔕")
+            st.warning(f"🔴 **全部 {_n_all} 支股票 Telegram 已關閉**（靜音模式）", icon="🔕")
         else:
             _on_names  = [t for t in selected_tickers
                           if st.session_state.get(f"tg_enabled_{t}", True)]
             _off_names = [t for t in selected_tickers
                           if not st.session_state.get(f"tg_enabled_{t}", True)]
             st.info(
-                f"⚡ **部分開啟**：🟢 {', '.join(_on_names)}　"
+                f"⚡ **部分開啟**（{_n_on}/{_n_all}）：🟢 {', '.join(_on_names)}　"
                 f"🔴 {', '.join(_off_names)}",
                 icon="ℹ️",
             )
@@ -1725,10 +1741,11 @@ for tab_idx, ticker in enumerate(selected_tickers):
 
         _sw_col, _sw_info = st.columns([1, 5])
         with _sw_col:
+            # FIX: 按鈕顯示「下一步動作」，更符合直覺
             _sw_label = (
-                f"🟢 {ticker} Telegram：開啟"
+                f"🔴 關閉 {ticker} Telegram"
                 if st.session_state[_tg_en_key]
-                else f"🔴 {ticker} Telegram：已關閉"
+                else f"🟢 開啟 {ticker} Telegram"
             )
             if st.button(_sw_label, key=f"tg_toggle_{ticker}", use_container_width=True):
                 st.session_state[_tg_en_key] = not st.session_state[_tg_en_key]
@@ -1738,7 +1755,7 @@ for tab_idx, ticker in enumerate(selected_tickers):
                 st.success(f"🟢 **{ticker} Telegram 開啟**：條件匹配時自動推送", icon="✅")
             else:
                 st.warning(
-                    f"🔴 **{ticker} Telegram 已關閉（調參模式）**：只顯示 UI 提示，不發送訊息。",
+                    f"🔴 **{ticker} Telegram 已關閉（靜音模式）**：只顯示 UI 提示，不發送訊息。",
                     icon="🔕",
                 )
 
