@@ -83,11 +83,31 @@ def _tg_escape(text: str) -> str:
     return text
 
 
-def send_telegram_alert(msg: str) -> tuple:
+def send_telegram_alert(msg: str, ticker: str = None) -> tuple:
     """
     Send a plain-text message via Telegram Bot API.
     Returns (success: bool, error_msg: str).
+
+    FIX: 統一在函數入口檢查所有開關狀態（熔斷機制）
+    - 1️⃣ 檢查全域靜音開關 (tg_global_mute)
+    - 2️⃣ 檢查該股票的 tg_enabled_{ticker}
+    - 3️⃣ 無論呼叫端是否忘記檢查開關，都會被攔截
     """
+    # 熔斷機制 1：全域靜音（panic stop）
+    try:
+        if st.session_state.get("tg_global_mute", False):
+            return False, "Telegram 全域靜音已開啟"
+    except Exception:
+        pass
+
+    # 熔斷機制 2：個別股票開關
+    if ticker is not None:
+        try:
+            if not st.session_state.get(f"tg_enabled_{ticker}", True):
+                return False, f"Telegram 已關閉 ({ticker})"
+        except Exception:
+            pass
+
     if not (BOT_TOKEN and CHAT_ID):
         return False, "Telegram 未設定（請在 secrets.toml 中設定 BOT_TOKEN 和 CHAT_ID）"
     try:
@@ -1457,6 +1477,34 @@ st.caption(f"⏱ 更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # ── 全域 Telegram 開關 ────────────────────────────────────────────────────────
 if selected_tickers:
+    # 初始化全域靜音開關
+    if "tg_global_mute" not in st.session_state:
+        st.session_state["tg_global_mute"] = False
+
+    # ── 1️⃣ 全域靜音熔斷開關（優先級最高）──────────────────────────────────
+    _mute_col1, _mute_col2 = st.columns([1, 5])
+    with _mute_col1:
+        _mute_on = st.session_state["tg_global_mute"]
+        if st.button(
+            "🔔 解除全域靜音" if _mute_on else "🔇 全域靜音（總開關）",
+            key="tg_global_mute_btn",
+            use_container_width=True,
+            type="secondary" if _mute_on else "primary",
+            help="一鍵徹底阻止所有 Telegram 發送，無視其他設定",
+        ):
+            st.session_state["tg_global_mute"] = not _mute_on
+            st.rerun()
+    with _mute_col2:
+        if _mute_on:
+            st.error(
+                "🔇 **全域靜音已啟用** — 所有 Telegram 訊息都被強制攔截，"
+                "無視個別股票開關。點擊左側按鈕可解除。",
+                icon="🚫",
+            )
+        else:
+            st.caption("💡 如果「全部關閉」後仍收到訊息，點擊左邊的「🔇 全域靜音」強制阻止所有發送")
+
+    # ── 2️⃣ 個別股票開關（在全域靜音未啟用時才顯示）──────────────────────
     _n_on  = sum(1 for _tk in selected_tickers
                  if st.session_state.get(f"tg_enabled_{_tk}", True))
     _n_all = len(selected_tickers)
@@ -1465,14 +1513,12 @@ if selected_tickers:
 
     _gc1, _gc2, _gc3 = st.columns([1, 1, 4])
 
-    # FIX BUG-A: 按鈕表達「動作」而非「狀態」
-    # 用兩個獨立按鈕：一個「全部開啟」、一個「全部關閉」，語意清楚
     with _gc1:
         if st.button(
             f"🟢 全部開啟",
             key="tg_all_on",
             use_container_width=True,
-            disabled=_all_on,  # 已經全開時禁用
+            disabled=_all_on or _mute_on,  # 全域靜音時禁用
             help=f"將全部 {_n_all} 支股票的 Telegram 開啟",
         ):
             for _tk in selected_tickers:
@@ -1484,7 +1530,7 @@ if selected_tickers:
             f"🔴 全部關閉",
             key="tg_all_off",
             use_container_width=True,
-            disabled=_all_off,  # 已經全關時禁用
+            disabled=_all_off,
             help=f"將全部 {_n_all} 支股票的 Telegram 關閉（靜音模式）",
         ):
             for _tk in selected_tickers:
@@ -1492,7 +1538,9 @@ if selected_tickers:
             st.rerun()
 
     with _gc3:
-        if _all_on:
+        if _mute_on:
+            st.warning(f"🔇 全域靜音優先，個別股票開關（{_n_on}/{_n_all} 開啟）暫時無效", icon="ℹ️")
+        elif _all_on:
             st.success(f"🟢 **全部 {_n_all} 支股票 Telegram 已開啟**", icon="✅")
         elif _all_off:
             st.warning(f"🔴 **全部 {_n_all} 支股票 Telegram 已關閉**（靜音模式）", icon="🔕")
@@ -2091,7 +2139,7 @@ for tab_idx, ticker in enumerate(selected_tickers):
                         f"({data['成交量標記'].iloc[-1]})"
                     )
                     if st.session_state.get(f"tg_enabled_{ticker}", True):
-                        _ok, _err = send_telegram_alert(_msg)
+                        _ok, _err = send_telegram_alert(_msg, ticker=ticker)
                         if _ok:
                             _tg_mark_sent(_dedup_key_sig, sig)
                             st.toast(f"📡 Telegram 已推送：{sig} ({_p1_dir_label})", icon="✅")
@@ -2277,7 +2325,7 @@ for tab_idx, ticker in enumerate(selected_tickers):
                             match_no=_mn, total_matches=_total_matched,
                             direction=_dir,
                         )
-                        _ok, _err = send_telegram_alert(_msg)
+                        _ok, _err = send_telegram_alert(_msg, ticker=ticker)
                         if _ok:
                             _send_ok_count += 1
                             _tg_mark_sent(_dedup_key_cond, _cond_id)
@@ -2308,7 +2356,7 @@ for tab_idx, ticker in enumerate(selected_tickers):
                         f"成交量：{_fmt_vol(data['Volume'].iloc[-1])}  ({_cur_vol})\n方向：🟢 做多（買入）"
                     )
                     if _tg_on_bo:
-                        _ok, _err = send_telegram_alert(_bo_msg)
+                        _ok, _err = send_telegram_alert(_bo_msg, ticker=ticker)
                         if _ok:
                             _tg_mark_sent(_dedup_key_sig, "breakout_high")
                             st.toast(f"🚀 {ticker} 破 {W}K 新高，Telegram 已推送", icon="🚀")
@@ -2323,7 +2371,7 @@ for tab_idx, ticker in enumerate(selected_tickers):
                         f"成交量：{_fmt_vol(data['Volume'].iloc[-1])}  ({_cur_vol})\n方向：🔴 做空（賣出）"
                     )
                     if _tg_on_bo:
-                        _ok, _err = send_telegram_alert(_bd_msg)
+                        _ok, _err = send_telegram_alert(_bd_msg, ticker=ticker)
                         if _ok:
                             _tg_mark_sent(_dedup_key_sig, "breakdown_low")
                             st.toast(f"🔻 {ticker} 穿 {W}K 新低，Telegram 已推送", icon="🔻")
